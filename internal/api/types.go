@@ -50,6 +50,14 @@ type Session struct {
 	Directory string      `json:"directory"`
 	Title     string      `json:"title"`
 	Time      SessionTime `json:"time"`
+	Share     struct {
+		URL string `json:"url"`
+	} `json:"share"`
+}
+
+// SessionState is one entry of GET /session/status (idle sessions are absent).
+type SessionState struct {
+	Type string `json:"type"` // busy | retry | idle
 }
 
 type Todo struct {
@@ -87,6 +95,7 @@ type ToolState struct {
 	Title  string `json:"title"`
 	Output string `json:"output"`
 	Error  string `json:"error"`
+	Input  map[string]any `json:"input"`
 }
 
 // Part is a message part. Type selects which fields are set:
@@ -148,7 +157,70 @@ const (
 	EventSessionError      = "session.error"
 	EventTodoUpdated       = "todo.updated"
 	EventFileEdited        = "file.edited"
+	EventQuestionAsked     = "question.asked"
+	EventQuestionReplied   = "question.replied"
+	EventQuestionRejected  = "question.rejected"
 )
+
+// QuestionOption is one choice of a question.
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+// QuestionInfo is one question asked by the agent's question tool.
+// Custom nil means a typed answer is allowed (OpenCode's default).
+type QuestionInfo struct {
+	Question string           `json:"question"`
+	Header   string           `json:"header"`
+	Options  []QuestionOption `json:"options"`
+	Multiple bool             `json:"multiple"`
+	Custom   *bool            `json:"custom"`
+}
+
+// AllowCustom reports whether the user may type their own answer.
+func (q QuestionInfo) AllowCustom() bool { return q.Custom == nil || *q.Custom }
+
+// QuestionRequest is the payload of question.asked.
+type QuestionRequest struct {
+	ID        string         `json:"id"`
+	SessionID string         `json:"sessionID"`
+	Questions []QuestionInfo `json:"questions"`
+}
+
+// QuestionDone is the payload of question.replied and question.rejected.
+type QuestionDone struct {
+	SessionID string `json:"sessionID"`
+	RequestID string `json:"requestID"`
+}
+
+func (e Event) Question() (QuestionRequest, error) {
+	var v QuestionRequest
+	err := json.Unmarshal(e.Properties, &v)
+	return v, err
+}
+
+func (e Event) QuestionDone() (QuestionDone, error) {
+	var v QuestionDone
+	err := json.Unmarshal(e.Properties, &v)
+	return v, err
+}
+
+// SessionStatusProps is the payload of session.status.
+type SessionStatusProps struct {
+	SessionID string `json:"sessionID"`
+	Status    struct {
+		Type    string `json:"type"` // idle | busy | retry
+		Attempt int    `json:"attempt"`
+		Message string `json:"message"`
+	} `json:"status"`
+}
+
+func (e Event) SessionStatus() (SessionStatusProps, error) {
+	var v SessionStatusProps
+	err := json.Unmarshal(e.Properties, &v)
+	return v, err
+}
 
 // PartUpdate is the payload of message.part.updated.
 type PartUpdate struct {

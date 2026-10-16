@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,6 +31,18 @@ type agentState struct {
 	modelIdx int
 	ready    bool
 	err      error
+	retries  int // consecutive failed event-stream reconnects
+	waiting  bool // a prompt is waiting for the user (window title)
+
+	files   []string // @file completion cache
+	filesAt time.Time
+	acOn    bool // a Tab completion is being cycled
+	acQuery string
+	acIdx   int
+
+	hist    []string // prompt history
+	histIdx int
+	draft   string
 }
 
 type modelChoice struct {
@@ -47,6 +60,10 @@ type runState struct {
 	todoDone      int
 	todoTotal     int
 	pending       *PermissionRequest
+	permQ         []*PermissionRequest
+	question      *QuestionPrompt
+	questQ        []*QuestionPrompt
+	revertID      string // message /undo reverted to ("" = none)
 	partIdx       map[string]int
 	msgs          map[string]api.Message
 	lastAssistant string
@@ -67,11 +84,19 @@ type agentStreamEndMsg struct{ err error }
 
 type permissionSentMsg struct{ err error }
 
+type questionSentMsg struct{ err error }
+
+type agentReconnectMsg struct {
+	events <-chan api.Event
+	errs   <-chan error
+}
+
 type abortSentMsg struct{ err error }
 
 type sessionCreatedMsg struct {
 	localID string
 	text    string
+	mode    Mode
 	session api.Session
 	err     error
 }
@@ -127,13 +152,13 @@ func (a *agentState) wait() tea.Cmd {
 	}
 }
 
-func (a *agentState) createSession(localID, text string) tea.Cmd {
+func (a *agentState) createSession(localID, text string, mode Mode) tea.Cmd {
 	c := a.client
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
 		defer cancel()
 		s, err := c.CreateSession(ctx, "")
-		return sessionCreatedMsg{localID: localID, text: text, session: s, err: err}
+		return sessionCreatedMsg{localID: localID, text: text, mode: mode, session: s, err: err}
 	}
 }
 
@@ -152,6 +177,38 @@ func (a *agentState) reply(requestID, reply string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
 		defer cancel()
 		return permissionSentMsg{err: c.RespondPermission(ctx, requestID, reply)}
+	}
+}
+
+func (a *agentState) replyQuestion(requestID string, answers [][]string) tea.Cmd {
+	c := a.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+		defer cancel()
+		return questionSentMsg{err: c.ReplyQuestion(ctx, requestID, answers)}
+	}
+}
+
+func (a *agentState) rejectQuestion(requestID string) tea.Cmd {
+	c := a.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+		defer cancel()
+		return questionSentMsg{err: c.RejectQuestion(ctx, requestID)}
+	}
+}
+
+// reconnect reopens the SSE stream after a short pause.
+func (a *agentState) reconnect() tea.Cmd {
+	c := a.client
+	return func() tea.Msg {
+		select {
+		case <-time.After(2 * time.Second):
+		case <-a.ctx.Done():
+			return agentStreamEndMsg{err: a.ctx.Err()}
+		}
+		events, errs := c.Events(a.ctx)
+		return agentReconnectMsg{events: events, errs: errs}
 	}
 }
 
@@ -261,11 +318,17 @@ func (p *ProjectView) finishRun(s *Session) {
 	}
 	s.run.working = false
 	s.run.tool = ""
+	s.run.clearPrompts()
 	p.handoffDone, p.handoffTotal = handoffProgress(p.ProjectPath)
+	p.gd.reload(p.ProjectPath)
 }
 
 // submit sends text to the active session. Returns nil when it cannot.
-func (p *ProjectView) submit(text string) tea.Cmd {
+func (p *ProjectView) submit(text string) tea.Cmd { return p.submitAs(text, text, p.mode) }
+
+// submitAs shows `shown` in the chat but sends `prompt` to the agent in the
+// given mode (used by /handoff, which needs Build to edit HANDOFF.md).
+func (p *ProjectView) submitAs(shown, prompt string, mode Mode) tea.Cmd {
 	a := p.agent
 	s := &p.sessions[p.activeSession]
 	if !a.ready {
@@ -276,14 +339,15 @@ func (p *ProjectView) submit(text string) tea.Cmd {
 		p.note(s, MsgSystem, "the agent is busy; press Esc to abort it")
 		return nil
 	}
-	s.Messages = append(s.Messages, Message{Type: MsgUser, Content: text, Timestamp: time.Now()})
+	s.Messages = append(s.Messages, Message{Type: MsgUser, Content: shown, Timestamp: time.Now()})
+	s.run.revertID = ""
 	s.run.working = true
 	s.run.startedAt = time.Now()
 	s.scroll = 0
 	if s.RemoteID == "" {
-		return a.createSession(s.ID, text)
+		return a.createSession(s.ID, prompt, mode)
 	}
-	return a.prompt(s.ID, s.RemoteID, text, p.mode)
+	return a.prompt(s.ID, s.RemoteID, prompt, mode)
 }
 
 // handleAgentMsg processes every agent-related tea.Msg. ok reports whether
@@ -296,22 +360,61 @@ func (p *ProjectView) handleAgentMsg(msg tea.Msg) (cmd tea.Cmd, ok bool) {
 		a.events, a.errs = msg.events, msg.errs
 		a.ready = true
 		a.setProviders(msg.providers)
+		a.applyDefaultModel()
 		return a.wait(), true
 	case agentErrMsg:
 		a.err = msg.err
 		p.note(&p.sessions[p.activeSession], MsgError, "OpenCode: "+msg.err.Error())
 		return nil, true
 	case agentStreamEndMsg:
-		a.ready = false
-		text := "OpenCode event stream closed"
-		if msg.err != nil {
-			text += ": " + msg.err.Error()
+		if a.ctx.Err() != nil {
+			return nil, true
 		}
-		p.note(&p.sessions[p.activeSession], MsgError, text)
-		return nil, true
+		a.ready = false
+		a.retries++
+		if a.retries == 1 || a.retries == 21 {
+			text := "OpenCode event stream closed"
+			if msg.err != nil {
+				text += ": " + msg.err.Error()
+			}
+			if a.retries == 1 {
+				text += " (reconnecting…)"
+			} else {
+				text = "OpenCode is unreachable; restart Forge"
+			}
+			p.note(&p.sessions[p.activeSession], MsgError, text)
+		}
+		if a.retries > 20 {
+			return nil, true
+		}
+		return a.reconnect(), true
+	case agentReconnectMsg:
+		a.events, a.errs = msg.events, msg.errs
+		a.ready = true
+		return a.wait(), true
 	case agentEventMsg:
+		resync := false
+		if a.retries > 0 {
+			a.retries = 0
+			resync = true
+			p.note(&p.sessions[p.activeSession], MsgSystem, "OpenCode event stream reconnected")
+		}
 		p.onAgentEvent(msg.ev)
-		return tea.Batch(a.wait(), p.gitAfterEvent(msg.ev)), true
+		cmds := []tea.Cmd{a.wait(), p.gitAfterEvent(msg.ev), p.waitingCmd()}
+		if resync {
+			cmds = append(cmds, a.resync())
+		}
+		return tea.Batch(cmds...), true
+	case resyncMsg:
+		p.onResync(msg)
+		return p.waitingCmd(), true
+	case slashDoneMsg:
+		return p.onSlashDone(msg), true
+	case rejectSentMsg:
+		if msg.err != nil {
+			p.note(&p.sessions[p.activeSession], MsgError, "permission reply: "+msg.err.Error())
+		}
+		return nil, true
 	case sessionCreatedMsg:
 		s := p.sessionByLocal(msg.localID)
 		if s == nil {
@@ -323,7 +426,7 @@ func (p *ProjectView) handleAgentMsg(msg tea.Msg) (cmd tea.Cmd, ok bool) {
 			return nil, true
 		}
 		s.RemoteID = msg.session.ID
-		return a.prompt(s.ID, s.RemoteID, msg.text, p.mode), true
+		return a.prompt(s.ID, s.RemoteID, msg.text, msg.mode), true
 	case promptSentMsg:
 		if s := p.sessionByLocal(msg.localID); s != nil && msg.err != nil {
 			p.note(s, MsgError, "send: "+msg.err.Error())
@@ -333,6 +436,11 @@ func (p *ProjectView) handleAgentMsg(msg tea.Msg) (cmd tea.Cmd, ok bool) {
 	case permissionSentMsg:
 		if msg.err != nil {
 			p.note(&p.sessions[p.activeSession], MsgError, "permission reply: "+msg.err.Error())
+		}
+		return nil, true
+	case questionSentMsg:
+		if msg.err != nil {
+			p.note(&p.sessions[p.activeSession], MsgError, "question reply: "+msg.err.Error())
 		}
 		return nil, true
 	case abortSentMsg:
@@ -389,7 +497,8 @@ func (p *ProjectView) onAgentEvent(ev api.Event) {
 		}
 		if s := p.sessionByRemote(pm.SessionID); s != nil {
 			req := &PermissionRequest{ID: pm.ID, Tool: pm.Permission, Description: strings.Join(pm.Patterns, ", ")}
-			s.run.pending = req
+			s.run.addPermission(req)
+			s.scroll = 0
 			s.Messages = append(s.Messages, Message{Type: MsgPermission, Permission: req, Timestamp: time.Now()})
 		}
 	case api.EventPermissionReplied:
@@ -397,8 +506,44 @@ func (p *ProjectView) onAgentEvent(ev api.Event) {
 		if err != nil {
 			return
 		}
-		if s := p.sessionByRemote(r.SessionID); s != nil && s.run.pending != nil && s.run.pending.ID == r.RequestID {
-			s.run.pending = nil
+		if s := p.sessionByRemote(r.SessionID); s != nil {
+			s.run.donePermission(r.RequestID)
+		}
+	case api.EventQuestionAsked:
+		q, err := ev.Question()
+		if err != nil || q.ID == "" || len(q.Questions) == 0 {
+			return
+		}
+		if s := p.sessionByRemote(q.SessionID); s != nil {
+			req := &QuestionPrompt{ID: q.ID, Items: q.Questions}
+			s.run.addQuestion(req)
+			s.scroll = 0
+			s.Messages = append(s.Messages, Message{Type: MsgQuestion, Question: req, Timestamp: time.Now()})
+		}
+	case api.EventQuestionReplied, api.EventQuestionRejected:
+		d, err := ev.QuestionDone()
+		if err != nil {
+			return
+		}
+		if s := p.sessionByRemote(d.SessionID); s != nil {
+			s.run.doneQuestion(d.RequestID, ev.Type == api.EventQuestionRejected)
+		}
+	case api.EventSessionStatus:
+		st, err := ev.SessionStatus()
+		if err != nil {
+			return
+		}
+		s := p.sessionByRemote(st.SessionID)
+		if s == nil {
+			return
+		}
+		switch st.Status.Type {
+		case "idle":
+			if s.run.working {
+				p.finishRun(s)
+			}
+		case "retry":
+			s.run.tool = fmt.Sprintf("retry %d: %s", st.Status.Attempt, st.Status.Message)
 		}
 	case api.EventSessionIdle:
 		if s := p.sessionByRemote(ev.SessionID()); s != nil {
@@ -418,6 +563,11 @@ func (p *ProjectView) onAgentEvent(ev api.Event) {
 		s := p.sessionByRemote(e.SessionID)
 		if s == nil {
 			s = &p.sessions[p.activeSession]
+		}
+		if e.Error.Name == "MessageAbortedError" {
+			p.note(s, MsgSystem, "aborted")
+			p.finishRun(s)
+			return
 		}
 		text := e.Error.Data.Message
 		if text == "" {
@@ -439,8 +589,13 @@ func (p *ProjectView) upsertPart(s *Session, part api.Part) {
 			return
 		}
 		m.Type, m.Content = MsgAssistant, part.Text
+	case "reasoning":
+		if strings.TrimSpace(part.Text) == "" {
+			return
+		}
+		m.Type, m.Content = MsgReasoning, strings.TrimSpace(part.Text)
 	case "tool":
-		m.Type, m.ToolName, m.Content = MsgTool, part.Tool, toolLine(part)
+		m.Type, m.ToolName, m.Content, m.Detail = MsgTool, part.Tool, toolLine(part), toolDetail(part)
 		if part.State.Status == "pending" || part.State.Status == "running" {
 			s.run.tool = part.Tool
 		} else if s.run.tool == part.Tool {

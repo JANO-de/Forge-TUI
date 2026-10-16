@@ -39,7 +39,7 @@ func Start(ctx context.Context, dir string) (*Server, error) {
 	}
 	cmd := exec.Command(bin, "serve", "--hostname", "127.0.0.1", "--port", fmt.Sprint(port))
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "OPENCODE_ENABLE_QUESTION_TOOL=1")
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}

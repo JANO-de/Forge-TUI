@@ -16,18 +16,24 @@ import (
 type Client struct {
 	base string
 	http *http.Client
+	long *http.Client // for slow calls such as summarize
 }
 
 func New(baseURL string) *Client {
 	return &Client{
 		base: strings.TrimRight(baseURL, "/"),
 		http: &http.Client{Timeout: 30 * time.Second},
+		long: &http.Client{Timeout: 10 * time.Minute},
 	}
 }
 
 func (c *Client) BaseURL() string { return c.base }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doWith(ctx, c.http, method, path, in, out)
+}
+
+func (c *Client) doWith(ctx context.Context, hc *http.Client, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -43,7 +49,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return err
 	}
@@ -125,6 +131,87 @@ func (c *Client) Abort(ctx context.Context, sessionID string) error {
 func (c *Client) RespondPermission(ctx context.Context, requestID, reply string) error {
 	body := map[string]any{"reply": reply}
 	return c.do(ctx, http.MethodPost, "/permission/"+url.PathEscape(requestID)+"/reply", body, nil)
+}
+
+// ReplyQuestion: POST /question/:requestID/reply. answers has one entry
+// (the chosen labels or typed text) per question, in order.
+func (c *Client) ReplyQuestion(ctx context.Context, requestID string, answers [][]string) error {
+	body := map[string]any{"answers": answers}
+	return c.do(ctx, http.MethodPost, "/question/"+url.PathEscape(requestID)+"/reply", body, nil)
+}
+
+// RejectQuestion: POST /question/:requestID/reject.
+func (c *Client) RejectQuestion(ctx context.Context, requestID string) error {
+	return c.do(ctx, http.MethodPost, "/question/"+url.PathEscape(requestID)+"/reject", nil, nil)
+}
+
+// RejectPermission rejects a permission request, optionally telling the
+// agent why.
+func (c *Client) RejectPermission(ctx context.Context, requestID, message string) error {
+	body := map[string]any{"reply": "reject"}
+	if message != "" {
+		body["message"] = message
+	}
+	return c.do(ctx, http.MethodPost, "/permission/"+url.PathEscape(requestID)+"/reply", body, nil)
+}
+
+// ListQuestions: GET /question (pending question requests).
+func (c *Client) ListQuestions(ctx context.Context) ([]QuestionRequest, error) {
+	var q []QuestionRequest
+	err := c.do(ctx, http.MethodGet, "/question", nil, &q)
+	return q, err
+}
+
+// ListPermissions: GET /permission (pending permission requests).
+func (c *Client) ListPermissions(ctx context.Context) ([]Permission, error) {
+	var p []Permission
+	err := c.do(ctx, http.MethodGet, "/permission", nil, &p)
+	return p, err
+}
+
+// SessionStatuses: GET /session/status, keyed by session ID.
+func (c *Client) SessionStatuses(ctx context.Context) (map[string]SessionState, error) {
+	var m map[string]SessionState
+	err := c.do(ctx, http.MethodGet, "/session/status", nil, &m)
+	return m, err
+}
+
+// Revert: POST /session/:id/revert (undo a message and its file changes).
+func (c *Client) Revert(ctx context.Context, sessionID, messageID string) error {
+	body := map[string]any{"messageID": messageID}
+	return c.do(ctx, http.MethodPost, "/session/"+url.PathEscape(sessionID)+"/revert", body, nil)
+}
+
+// Unrevert: POST /session/:id/unrevert.
+func (c *Client) Unrevert(ctx context.Context, sessionID string) error {
+	return c.do(ctx, http.MethodPost, "/session/"+url.PathEscape(sessionID)+"/unrevert", nil, nil)
+}
+
+// Summarize: POST /session/:id/summarize (compact the context). Slow.
+func (c *Client) Summarize(ctx context.Context, sessionID string, m *ModelRef) error {
+	if m == nil || m.ProviderID == "" {
+		return fmt.Errorf("no model selected")
+	}
+	body := map[string]any{"providerID": m.ProviderID, "modelID": m.ModelID}
+	return c.doWith(ctx, c.long, http.MethodPost, "/session/"+url.PathEscape(sessionID)+"/summarize", body, nil)
+}
+
+// Share: POST /session/:id/share.
+func (c *Client) Share(ctx context.Context, sessionID string) (Session, error) {
+	var s Session
+	err := c.do(ctx, http.MethodPost, "/session/"+url.PathEscape(sessionID)+"/share", nil, &s)
+	return s, err
+}
+
+// Fork: POST /session/:id/fork. With messageID the copy stops before it.
+func (c *Client) Fork(ctx context.Context, sessionID, messageID string) (Session, error) {
+	body := map[string]any{}
+	if messageID != "" {
+		body["messageID"] = messageID
+	}
+	var s Session
+	err := c.do(ctx, http.MethodPost, "/session/"+url.PathEscape(sessionID)+"/fork", body, &s)
+	return s, err
 }
 
 // Todos: GET /session/:id/todo.

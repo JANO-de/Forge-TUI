@@ -40,7 +40,7 @@ func send(t *testing.T, pv ProjectView, msg tea.Msg) ProjectView {
 			continue
 		}
 		switch m.(type) {
-		case nil, diffLoadedMsg, diffActionMsg, treeMarksMsg, sessionListMsg, sessionLoadedMsg:
+		case nil, diffLoadedMsg, diffActionMsg, treeMarksMsg, sessionListMsg, sessionLoadedMsg, sessionCreatedMsg, promptSentMsg:
 		case tea.KeyMsg, tea.WindowSizeMsg:
 		default:
 			continue
@@ -180,5 +180,24 @@ func TestFileTreeShowsGitMarks(t *testing.T) {
 	pv = send(t, pv, treeMarksMsg{marks: map[string]string{}})
 	if !strings.Contains(pv.View(), "agent.go") {
 		t.Fatal("new file not listed after refresh")
+	}
+}
+
+func TestCtrlTTogglesFocusWithoutClosing(t *testing.T) {
+	dir := t.TempDir()
+	sh(t, dir, "init", "-q")
+	pv := InitialProjectView(dir, 140, 40)
+	pv = send(t, pv, tea.KeyMsg{Type: tea.KeyCtrlF})
+	pv = send(t, pv, tea.KeyMsg{Type: tea.KeyCtrlD})
+	if pv.activePane != PaneDiff || !pv.showFiles || pv.right != PaneDiff {
+		t.Fatalf("setup: %v %v %v", pv.activePane, pv.showFiles, pv.right)
+	}
+	pv = send(t, pv, tea.KeyMsg{Type: tea.KeyCtrlT})
+	if pv.activePane != PaneChat || !pv.showFiles || pv.right != PaneDiff {
+		t.Fatal("Ctrl+T should focus chat and keep both columns")
+	}
+	pv = send(t, pv, tea.KeyMsg{Type: tea.KeyCtrlT})
+	if pv.activePane != PaneDiff {
+		t.Fatalf("Ctrl+T should return to the diff, got %v", pv.activePane)
 	}
 }

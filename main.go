@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"forge/internal/registry"
+	"forge/internal/settings"
 	"forge/internal/ui/lobby"
 	"forge/internal/ui/project"
 	"forge/internal/ui/wizard"
@@ -107,9 +108,25 @@ func (m model) View() string {
 }
 
 func main() {
-	path := ""
-	if len(os.Args) > 1 {
-		abs, err := filepath.Abs(os.Args[1])
+	path, cont := "", false
+	for _, a := range os.Args[1:] {
+		switch a {
+		case "-c", "--continue":
+			cont = true
+		default:
+			path = a
+		}
+	}
+	if cont && path == "" {
+		last, ok := registry.MostRecent()
+		if !ok {
+			fmt.Fprintln(os.Stderr, "forge: no recent project to continue")
+			os.Exit(1)
+		}
+		path = last.Path
+	}
+	if path != "" {
+		abs, err := filepath.Abs(path)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -120,6 +137,7 @@ func main() {
 		}
 		path = abs
 	}
+	settings.ApplyEditor()
 	p := tea.NewProgram(initialModel(path), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	final, err := p.Run()
 	if m, ok := final.(model); ok {

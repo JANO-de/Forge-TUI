@@ -12,6 +12,7 @@ const (
 	colAssistant  = lipgloss.Color("046")
 	colPermission = lipgloss.Color("214")
 	colError      = lipgloss.Color("196")
+	colThink      = lipgloss.Color("245")
 )
 
 var toolIconColor = map[string]lipgloss.Color{
@@ -41,33 +42,55 @@ func (p ProjectView) chatLines() []string {
 	}
 	var lines []string
 	prev := MsgType(-1)
+	opts := viewOpts{think: p.showThink, tools: p.showTools}
 	for i, m := range s.Messages {
-		if i > 0 && !(m.Type == MsgTool && prev == MsgTool) {
+		if i > 0 && !(isCompact(m.Type) && isCompact(prev)) {
 			lines = append(lines, "")
 		}
-		lines = append(lines, renderBlock(m, pendingID, p.chatWidth())...)
+		lines = append(lines, renderBlock(m, pendingID, p.chatWidth(), opts)...)
 		prev = m.Type
 	}
 	return lines
 }
 
-func renderBlock(m Message, pendingID string, w int) []string {
+type viewOpts struct{ think, tools bool }
+
+func isCompact(t MsgType) bool { return t == MsgTool || t == MsgReasoning }
+
+func renderBlock(m Message, pendingID string, w int, o viewOpts) []string {
 	switch m.Type {
 	case MsgUser:
 		return withBar("You", colUser, wrapPlain(m.Content, w-2))
 	case MsgAssistant:
 		return withBar("Assistant", colAssistant, renderMarkdown(m.Content, w-2))
 	case MsgTool:
-		return []string{toolLineStyled(m.Content, w)}
+		lines := []string{toolLineStyled(m.Content, w)}
+		if o.tools && m.Detail != "" {
+			for _, d := range strings.Split(m.Detail, "\n") {
+				lines = append(lines, mutedStyle.Render("      "+clip(d, w-8)))
+			}
+		}
+		return lines
+	case MsgReasoning:
+		if o.think {
+			return withBar("Thinking", colThink, wrapMuted(m.Content, w-2))
+		}
+		n := strings.Count(strings.TrimSpace(m.Content), "\n") + 1
+		return []string{mutedStyle.Render(fmt.Sprintf("  ▸ thinking · %d lines · Ctrl+R to show", n))}
 	case MsgPermission:
 		if m.Permission == nil {
 			return nil
 		}
 		text := m.Permission.Tool + " " + m.Permission.Description
 		if m.Permission.ID == pendingID {
-			text += "\n[y] allow once   [a] always   [n] reject"
+			text += "\n[y] allow once   [a] always   [n] reject   [f] reject + feedback"
 		}
 		return withBar("Permission", colPermission, wrapPlain(text, w-2))
+	case MsgQuestion:
+		if m.Question == nil {
+			return nil
+		}
+		return renderQuestion(m.Question, w)
 	case MsgError:
 		return withBar("Error", colError, wrapPlain(m.Content, w-2))
 	}

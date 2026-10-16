@@ -33,6 +33,8 @@ const (
 	MsgAssistant
 	MsgTool
 	MsgPermission
+	MsgQuestion
+	MsgReasoning
 	MsgSystem
 	MsgError
 )
@@ -42,6 +44,8 @@ type Message struct {
 	Content    string
 	ToolName   string
 	Permission *PermissionRequest
+	Question   *QuestionPrompt
+	Detail     string // tool input/output, shown with Ctrl+X
 	Timestamp  time.Time
 }
 
@@ -49,6 +53,8 @@ type PermissionRequest struct {
 	Tool        string
 	Description string
 	ID          string
+	Typing      bool // typing a rejection reason
+	Text        string
 }
 
 // Session is one chat tab. RemoteID is the OpenCode session ID ("" until the
@@ -93,6 +99,7 @@ type ProjectView struct {
 	err           error
 	statusBar     status.StatusBar
 	activePane    Pane
+	lastPane      Pane // last side pane that had focus, for Ctrl+T
 	fileTree      *panes.FileTree
 	fileViewer    *panes.FileViewer
 	diff          *panes.DiffPane
@@ -100,12 +107,15 @@ type ProjectView struct {
 	tctl          *diffCtl
 	agent         *agentState
 	picker        *sessionPicker
+	gd            *guideState
 	showFiles     bool
 	right         Pane // PaneChat = no right column
 	guideScroll   int
 	spin          int
 	handoffDone   int
 	handoffTotal  int
+	showThink     bool // Ctrl+R: expand reasoning
+	showTools     bool // Ctrl+X: expand tool input/output
 }
 
 func InitialProjectView(projectPath string, width, height int) ProjectView {
@@ -123,12 +133,14 @@ func InitialProjectView(projectPath string, width, height int) ProjectView {
 		agent:      newAgentState(),
 		diff:       panes.NewDiffPane(),
 		dctl:       &diffCtl{},
+		gd:         &guideState{},
 		tctl:       &diffCtl{},
 	}
 	if ft, err := panes.NewFileTree(projectPath); err == nil {
 		pv.fileTree = ft
 	}
 	pv.handoffDone, pv.handoffTotal = handoffProgress(projectPath)
+	pv.gd.reload(projectPath)
 	pv.statusBar = pv.statusBar.Update(pv.statusData())
 	return pv
 }
@@ -167,8 +179,22 @@ func (p ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p.fileViewer != nil && msg.Path == p.fileViewer.Path && msg.Err == nil {
 			p.fileViewer.Reload()
 		}
+		p.gd.reload(p.ProjectPath)
+		p.handoffDone, p.handoffTotal = handoffProgress(p.ProjectPath)
 		return p, tea.Batch(p.refreshTree(), p.refreshDiffIfOpen())
 	case tea.KeyMsg:
+		if p.permTyping() {
+			if cmd, ok := p.handlePermTyping(msg); ok {
+				p.refreshStatus()
+				return p, cmd
+			}
+		}
+		if p.hasQuestion() {
+			if cmd, ok := p.handleQuestionKey(msg); ok {
+				p.refreshStatus()
+				return p, cmd
+			}
+		}
 		var cmd tea.Cmd
 		var m tea.Model
 		if p.inputMode {
@@ -206,16 +232,41 @@ func (p ProjectView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (p ProjectView) handleInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type != tea.KeyTab {
+		p.agent.acOn = false
+	}
 	switch msg.Type {
 	case tea.KeyEnter:
+		if msg.Alt { // Alt+Enter: newline
+			p.input += "\n"
+			return p, nil
+		}
 		text := strings.TrimSpace(p.input)
 		if text == "" {
 			return p, nil
 		}
 		p.input, p.inputMode = "", false
+		p.agent.pushHistory(text)
+		if text == "/handoff" {
+			return p, p.runHandoff()
+		}
+		if strings.HasPrefix(text, "/") {
+			if cmd, ok := p.slash(text); ok {
+				return p, cmd
+			}
+		}
 		return p, p.submit(text)
+	case tea.KeyCtrlJ: // newline
+		p.input += "\n"
+	case tea.KeyTab:
+		p.input = p.complete(p.input)
+	case tea.KeyUp:
+		p.agent.historyPrev(&p.input)
+	case tea.KeyDown:
+		p.agent.historyNext(&p.input)
 	case tea.KeyEsc:
 		p.input, p.inputMode = "", false
+		p.agent.histIdx = len(p.agent.hist)
 	case tea.KeyBackspace:
 		if r := []rune(p.input); len(r) > 0 {
 			p.input = string(r[:len(r)-1])
@@ -242,11 +293,20 @@ func (p ProjectView) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return p, cmd
 		}
 	}
+	if p.activePane == PaneGuidelines {
+		if cmd, ok := p.handleGuideKey(msg); ok {
+			return p, cmd
+		}
+	}
 	if p.activePane == PaneChat && s.run.pending != nil && msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
+		if msg.Runes[0] == 'f' {
+			s.run.pending.Typing, s.run.pending.Text = true, ""
+			return p, nil
+		}
 		reply := map[rune]string{'y': "once", 'a': "always", 'n': "reject"}[msg.Runes[0]]
 		if reply != "" {
 			id := s.run.pending.ID
-			s.run.pending = nil
+			s.run.donePermission(id)
 			p.note(s, MsgSystem, "permission: "+reply)
 			return p, p.agent.reply(id, reply)
 		}
@@ -284,6 +344,7 @@ func (p ProjectView) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyCtrlG:
 		p.togglePane(PaneGuidelines)
+		p.gd.reload(p.ProjectPath)
 	case tea.KeyPgUp:
 		p.page(-1)
 	case tea.KeyPgDown:
@@ -323,9 +384,15 @@ func (p ProjectView) handleKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if p.activePane == PaneViewer && p.fileViewer != nil {
 			return p, p.fileViewer.OpenInEditor()
 		}
+	case tea.KeyCtrlR:
+		p.showThink = !p.showThink
+	case tea.KeyCtrlX:
+		p.showTools = !p.showTools
+	case tea.KeyCtrlT:
+		p.swapFocus()
 	case tea.KeyCtrlC, tea.KeyEsc:
 		if p.activePane != PaneChat {
-			p.activePane = PaneChat
+			p.lastPane, p.activePane = p.activePane, PaneChat
 		} else if s.run.working && s.RemoteID != "" {
 			return p, p.agent.abort(s.RemoteID)
 		} else {
@@ -372,5 +439,24 @@ func (p *ProjectView) closeSession() {
 	p.sessions = append(p.sessions[:p.activeSession], p.sessions[p.activeSession+1:]...)
 	if p.activeSession >= len(p.sessions) {
 		p.activeSession = len(p.sessions) - 1
+	}
+}
+
+// swapFocus (Ctrl+T) jumps from a side pane back to the chat without closing
+// anything, and from the chat back to the pane that had focus before.
+func (p *ProjectView) swapFocus() {
+	if p.activePane != PaneChat {
+		p.lastPane, p.activePane = p.activePane, PaneChat
+		return
+	}
+	switch {
+	case p.lastPane == PaneFiles && p.showFiles:
+		p.activePane = PaneFiles
+	case p.lastPane != PaneChat && p.lastPane != PaneFiles && p.lastPane == p.right:
+		p.activePane = p.lastPane
+	case p.showFiles:
+		p.activePane = PaneFiles
+	case p.right != PaneChat:
+		p.activePane = p.right
 	}
 }

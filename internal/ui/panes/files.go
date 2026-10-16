@@ -365,13 +365,18 @@ func (fv *FileViewer) View() string {
 	return s.String()
 }
 
-func (fv *FileViewer) OpenInEditor() tea.Cmd {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
+func (fv *FileViewer) OpenInEditor() tea.Cmd { return EditFile(fv.Path) }
+
+// EditFile opens path in $EDITOR (default vi) and reports back with an
+// EditorFinishedMsg. $EDITOR may carry arguments, e.g. "code -w".
+func EditFile(path string) tea.Cmd {
+	fields := strings.Fields(os.Getenv("EDITOR"))
+	if len(fields) == 0 {
+		fields = []string{"vi"}
 	}
-	return tea.ExecProcess(exec.Command(editor, fv.Path), func(err error) tea.Msg {
-		return EditorFinishedMsg{Path: fv.Path, Err: err}
+	cmd := exec.Command(fields[0], append(fields[1:], path)...)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return EditorFinishedMsg{Path: path, Err: err}
 	})
 }
 

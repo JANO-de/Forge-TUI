@@ -22,25 +22,18 @@
           SHELL = pkgs.fish;
         };
 
-        packages.forge = pkgs.stdenv.mkDerivation {
+        packages.default = pkgs.buildGoModule {
           pname = "forge";
           version = "0.1.0";
           src = ./.;
-          nativeBuildInputs = [ pkgs.go ];
-          buildInputs = [ pkgs.gcc pkgs.glibc ];
-          buildPhase = ''
-            export GOPROXY=https://proxy.golang.org
-            export GOSUMDB=sum.golang.org
-            export GOWORK=off
-            export GOCACHE=$TMPDIR/go-cache
-            mkdir -p $GOCACHE
-            go build -o $out/bin/forge .
-          '';
-          installPhase = ''
-            # Binary is already built to $out/bin/forge by buildPhase
-            :
-          '';
+          vendorHash = null; # uses ./vendor
+          subPackages = [ "." ];
+          nativeCheckInputs = [ pkgs.git ];
+          meta.mainProgram = "forge";
         };
+        packages.forge = self.packages.${system}.default;
       }
-    );
+    ) // {
+      nixosModules.default = import ./nix/module.nix { inherit self; };
+    };
 }

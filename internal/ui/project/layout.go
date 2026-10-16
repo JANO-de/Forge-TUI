@@ -1,7 +1,6 @@
 package project
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -149,23 +148,9 @@ func (p ProjectView) rightContent() (string, []string) {
 	case PaneDiff:
 		return p.diff.Title(), p.diff.Lines()
 	case PaneGuidelines:
-		return "Guidelines · HANDOFF", p.guidelineLines()
+		return "Guidelines · " + guideFiles[p.gd.tab], p.guidelineLines()
 	}
 	return "", nil
-}
-
-func (p ProjectView) guidelineLines() []string {
-	var out []string
-	for _, name := range []string{"AGENTS.md", "HANDOFF.md"} {
-		out = append(out, mutedStyle.Render("── "+name+" ──"))
-		if b, err := os.ReadFile(filepath.Join(p.ProjectPath, name)); err == nil {
-			out = append(out, strings.Split(string(b), "\n")...)
-		} else {
-			out = append(out, mutedStyle.Render("(not found)"))
-		}
-		out = append(out, "")
-	}
-	return out
 }
 
 // rightScroll returns the clamped scroll offset of the right pane.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -15,6 +16,7 @@ type Project struct {
 	GitBranch    string    `json:"gitBranch,omitempty"`
 	GitDirty     bool      `json:"gitDirty,omitempty"`
 	TodoProgress string    `json:"todoProgress,omitempty"`
+	Pinned       bool      `json:"pinned,omitempty"`
 }
 
 type Registry struct {
@@ -133,4 +135,36 @@ func Touch(path string) error {
 		return r.Add(Project{Path: path, Name: filepath.Base(path), LastOpened: time.Now()})
 	}
 	return r.Update(path, func(p *Project) { p.LastOpened = time.Now() })
+}
+
+// Sorted returns a copy of ps: pinned first, then most recently opened first.
+func Sorted(ps []Project) []Project {
+	out := append([]Project(nil), ps...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Pinned != out[j].Pinned {
+			return out[i].Pinned
+		}
+		return out[i].LastOpened.After(out[j].LastOpened)
+	})
+	return out
+}
+
+// MostRecent returns the most recently opened project whose directory still
+// exists (pinning is ignored), or false when there is none.
+func MostRecent() (Project, bool) {
+	r, err := Load()
+	if err != nil {
+		return Project{}, false
+	}
+	var best Project
+	found := false
+	for _, p := range r.Projects {
+		if st, err := os.Stat(p.Path); err != nil || !st.IsDir() {
+			continue
+		}
+		if !found || p.LastOpened.After(best.LastOpened) {
+			best, found = p, true
+		}
+	}
+	return best, found
 }
