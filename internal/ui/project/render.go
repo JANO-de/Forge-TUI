@@ -184,3 +184,109 @@ func (p *ProjectView) scrollBy(delta int) {
 	}
 	s.scroll = min(max(s.scroll+delta, 0), maxOff)
 }
+
+// performSearch searches for query in chat messages
+func (p *ProjectView) performSearch(query string) {
+	p.searchQuery = query
+	p.searchMatches = []int{}
+	p.searchIndex = 0
+	
+	if query == "" {
+		p.showSearch = false
+		return
+	}
+	
+	p.showSearch = true
+	if len(p.sessions) == 0 {
+		return
+	}
+	
+	lines := p.chatLines()
+	queryLower := strings.ToLower(query)
+	
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), queryLower) {
+			p.searchMatches = append(p.searchMatches, i)
+		}
+	}
+}
+
+// nextSearchMatch navigates to the next search match
+func (p *ProjectView) nextSearchMatch() {
+	if len(p.searchMatches) == 0 {
+		return
+	}
+	p.searchIndex = (p.searchIndex + 1) % len(p.searchMatches)
+	matchPos := p.searchMatches[p.searchIndex]
+	s := &p.sessions[p.activeSession]
+	h := p.chatHeight()
+	if matchPos >= s.scroll && matchPos < s.scroll+h {
+		return
+	}
+	s.scroll = max(0, matchPos-h/2)
+}
+
+// prevSearchMatch navigates to the previous search match
+func (p *ProjectView) prevSearchMatch() {
+	if len(p.searchMatches) == 0 {
+		return
+	}
+	p.searchIndex = (p.searchIndex - 1 + len(p.searchMatches)) % len(p.searchMatches)
+	matchPos := p.searchMatches[p.searchIndex]
+	s := &p.sessions[p.activeSession]
+	h := p.chatHeight()
+	if matchPos >= s.scroll && matchPos < s.scroll+h {
+		return
+	}
+	s.scroll = max(0, matchPos-h/2)
+}
+
+// copyLastCodeBlock extracts and returns the last code block from chat
+func (p *ProjectView) copyLastCodeBlock() string {
+	if len(p.sessions) == 0 {
+		return ""
+	}
+	s := p.sessions[p.activeSession]
+	var lastCodeBlock string
+	
+	for _, m := range s.Messages {
+		if m.Type == MsgUser || m.Type == MsgAssistant {
+			blocks := extractCodeBlocks(m.Content)
+			if len(blocks) > 0 {
+				lastCodeBlock = blocks[len(blocks)-1]
+			}
+		}
+	}
+	return lastCodeBlock
+}
+
+// extractCodeBlocks extracts code blocks from markdown text
+func extractCodeBlocks(text string) []string {
+	var blocks []string
+	lines := strings.Split(text, "\n")
+	inBlock := false
+	var currentBlock strings.Builder
+	
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			if inBlock {
+				if currentBlock.Len() > 0 {
+					blocks = append(blocks, strings.TrimSpace(currentBlock.String()))
+					currentBlock.Reset()
+				}
+				inBlock = false
+			} else {
+				inBlock = true
+			}
+		} else if inBlock {
+			currentBlock.WriteString(line + "\n")
+		}
+	}
+	
+	if inBlock && currentBlock.Len() > 0 {
+		blocks = append(blocks, strings.TrimSpace(currentBlock.String()))
+	}
+	
+	return blocks
+}
