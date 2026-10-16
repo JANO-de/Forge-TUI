@@ -190,20 +190,20 @@ func (p *ProjectView) performSearch(query string) {
 	p.searchQuery = query
 	p.searchMatches = []int{}
 	p.searchIndex = 0
-	
+
 	if query == "" {
 		p.showSearch = false
 		return
 	}
-	
+
 	p.showSearch = true
 	if len(p.sessions) == 0 {
 		return
 	}
-	
+
 	lines := p.chatLines()
 	queryLower := strings.ToLower(query)
-	
+
 	for i, line := range lines {
 		if strings.Contains(strings.ToLower(line), queryLower) {
 			p.searchMatches = append(p.searchMatches, i)
@@ -248,7 +248,7 @@ func (p *ProjectView) copyLastCodeBlock() string {
 	}
 	s := p.sessions[p.activeSession]
 	var lastCodeBlock string
-	
+
 	for _, m := range s.Messages {
 		if m.Type == MsgUser || m.Type == MsgAssistant {
 			blocks := extractCodeBlocks(m.Content)
@@ -266,7 +266,7 @@ func extractCodeBlocks(text string) []string {
 	lines := strings.Split(text, "\n")
 	inBlock := false
 	var currentBlock strings.Builder
-	
+
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
@@ -283,10 +283,10 @@ func extractCodeBlocks(text string) []string {
 			currentBlock.WriteString(line + "\n")
 		}
 	}
-	
+
 	if inBlock && currentBlock.Len() > 0 {
 		blocks = append(blocks, strings.TrimSpace(currentBlock.String()))
 	}
-	
+
 	return blocks
 }

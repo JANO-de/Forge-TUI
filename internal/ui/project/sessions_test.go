@@ -34,7 +34,7 @@ func TestLoadHistoryConvertsMessages(t *testing.T) {
 		kinds = append(kinds, fmt.Sprintf("%d:%s", m.Type, m.Content))
 	}
 	got := strings.Join(kinds, "|")
-	want := fmt.Sprintf("%d:add a flag|%d:✓ edit: main.go|%d:Done.", MsgUser, MsgTool, MsgAssistant)
+	want := fmt.Sprintf("%d:add a flag|%d:thinking|%d:✓ edit: main.go|%d:Done.", MsgUser, MsgReasoning, MsgTool, MsgAssistant)
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
@@ -43,7 +43,7 @@ func TestLoadHistoryConvertsMessages(t *testing.T) {
 	}
 	// A live update for a stored part replaces the line instead of appending.
 	pv.upsertPart(s, api.Part{ID: "p4", Type: "text", Text: "Done. More."})
-	if len(s.Messages) != 3 || s.Messages[2].Content != "Done. More." {
+	if len(s.Messages) != 4 || s.Messages[3].Content != "Done. More." {
 		t.Fatalf("part not updated in place: %+v", s.Messages)
 	}
 }

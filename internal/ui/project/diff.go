@@ -209,12 +209,12 @@ func (p *ProjectView) diffActAll(accept bool) tea.Cmd {
 	if p.diff == nil || !p.diff.Loaded || p.diff.NotRepo {
 		return nil
 	}
-	
+
 	files := p.diff.Files
 	if len(files) == 0 {
 		return nil
 	}
-	
+
 	dir := p.ProjectPath
 	return func() tea.Msg {
 		ctx, cancel := gitCtx()

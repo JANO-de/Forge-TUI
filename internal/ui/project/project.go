@@ -87,35 +87,35 @@ const (
 )
 
 type ProjectView struct {
-	ProjectPath   string
-	sessions      []Session
-	activeSession int
-	nextID        int
-	mode          Mode
-	input         string
-	inputMode     bool
-	height        int
-	width         int
-	err           error
-	statusBar     status.StatusBar
-	activePane    Pane
-	lastPane      Pane // last side pane that had focus, for Ctrl+T
-	fileTree      *panes.FileTree
-	fileViewer    *panes.FileViewer
-	diff          *panes.DiffPane
-	dctl          *diffCtl
-	tctl          *diffCtl
-	agent         *agentState
-	picker        *sessionPicker
-	gd            *guideState
-	showFiles     bool
-	right         Pane // PaneChat = no right column
-	guideScroll   int
-	spin          int
-	handoffDone   int
-	handoffTotal  int
-	showThink     bool // Ctrl+R: expand reasoning
-	showTools     bool // Ctrl+X: expand tool input/output
+	ProjectPath      string
+	sessions         []Session
+	activeSession    int
+	nextID           int
+	mode             Mode
+	input            string
+	inputMode        bool
+	height           int
+	width            int
+	err              error
+	statusBar        status.StatusBar
+	activePane       Pane
+	lastPane         Pane // last side pane that had focus, for Ctrl+T
+	fileTree         *panes.FileTree
+	fileViewer       *panes.FileViewer
+	diff             *panes.DiffPane
+	dctl             *diffCtl
+	tctl             *diffCtl
+	agent            *agentState
+	picker           *sessionPicker
+	gd               *guideState
+	showFiles        bool
+	right            Pane // PaneChat = no right column
+	guideScroll      int
+	spin             int
+	handoffDone      int
+	handoffTotal     int
+	showThink        bool // Ctrl+R: expand reasoning
+	showTools        bool // Ctrl+X: expand tool input/output
 	projectTokensIn  int
 	projectTokensOut int
 	projectCost      float64
