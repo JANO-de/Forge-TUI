@@ -10,7 +10,22 @@ import (
 )
 
 func (p *ProjectView) refreshStatus() {
+	p.updateProjectTotals()
 	p.statusBar = p.statusBar.Update(p.statusData())
+}
+
+// updateProjectTotals accumulates token and cost totals across all sessions
+func (p *ProjectView) updateProjectTotals() {
+	p.projectTokensIn = 0
+	p.projectTokensOut = 0
+	p.projectCost = 0
+	for _, sess := range p.sessions {
+		for _, m := range sess.run.msgs {
+			p.projectTokensIn += m.Tokens.Input + m.Tokens.Cache.Read + m.Tokens.Cache.Write
+			p.projectTokensOut += m.Tokens.Output
+			p.projectCost += m.Cost
+		}
+	}
 }
 
 func (p ProjectView) statusData() status.StatusData {
@@ -47,6 +62,10 @@ func (p ProjectView) statusData() status.StatusData {
 		d.TokensOut += m.Tokens.Output
 		d.Cost += m.Cost
 	}
+	// Add project-level totals
+	d.TokensIn += p.projectTokensIn
+	d.TokensOut += p.projectTokensOut
+	d.Cost += p.projectCost
 	if last, ok := s.run.msgs[s.run.lastAssistant]; ok && p.agent != nil {
 		used := last.Tokens.Input + last.Tokens.Output + last.Tokens.Cache.Read + last.Tokens.Cache.Write
 		for _, m := range p.agent.models {
@@ -62,8 +81,12 @@ func (p ProjectView) renderTabs() string {
 	var tabs []string
 	for i, sess := range p.sessions {
 		name := sess.Name
-		if sess.run.pending != nil || sess.run.question != nil {
-			name = "! " + name // waiting for the user
+		if sess.run.working {
+			name = "\u280b " + name // spinner for busy
+		} else if sess.run.pending != nil || sess.run.question != nil {
+			name = "! " + name // waiting for user
+		} else if sess.run.todoTotal > 0 && sess.run.todoDone == sess.run.todoTotal {
+			name = "\u2713 " + name // checkmark for done
 		}
 		if i == p.activeSession {
 			tabs = append(tabs, activeTabStyle.Render("["+name+"]"))
@@ -85,11 +108,11 @@ func (p ProjectView) renderInput() string {
 	case s.run.question != nil && p.picker == nil:
 		return box.BorderForeground(colPermission).Render(questionHint(s.run.question, w-4))
 	case p.picker != nil:
-		return box.BorderForeground(lipgloss.Color("205")).Render(mutedStyle.Render("↑↓ select · Enter open session · Esc cancel"))
+		return box.BorderForeground(lipgloss.Color("205")).Render(mutedStyle.Render("\u2191\u2193 select \u00b7 Enter open session \u00b7 Esc cancel"))
 	case p.inputMode:
-		r := []rune(strings.ReplaceAll(p.input, "\n", "↵"))
+		r := []rune(strings.ReplaceAll(p.input, "\n", "\u21b5"))
 		if limit := w - 8; len(r) > limit {
-			r = append([]rune("…"), r[len(r)-limit:]...)
+			r = append([]rune("\u2026"), r[len(r)-limit:]...)
 		}
 		hint := p.acHint()
 		if room := w - 10 - len(r); room > 6 {
@@ -97,22 +120,22 @@ func (p ProjectView) renderInput() string {
 		} else {
 			hint = ""
 		}
-		return box.BorderForeground(lipgloss.Color("229")).Render("› " + string(r) + "▌" + mutedStyle.Render(hint))
+		return box.BorderForeground(lipgloss.Color("229")).Render("\u203a " + string(r) + "\u258c" + mutedStyle.Render(hint))
 	case s.run.pending != nil && s.run.pending.Typing:
-		return box.BorderForeground(colPermission).Render("Reject reason › " + tailClip(s.run.pending.Text, w-40) + "▌  (Enter send · Esc back)")
+		return box.BorderForeground(colPermission).Render("Reject reason \u203a " + tailClip(s.run.pending.Text, w-40) + "\u258c  (Enter send \u00b7 Esc back)")
 	case s.run.pending != nil:
 		return box.BorderForeground(colPermission).Render("Permission:  [y] once  [a] always  [n] reject  [f] reject + feedback")
 	case s.run.working:
-		return box.BorderForeground(lipgloss.Color("226")).Render(mutedStyle.Render("working…  Esc aborts · PgUp/PgDn scroll"))
+		return box.BorderForeground(lipgloss.Color("226")).Render(mutedStyle.Render("working\u2026  Esc aborts \u00b7 PgUp/PgDn scroll"))
 	}
 	if p.activePane != PaneChat {
-		hint := "Esc/Ctrl+T back to chat · ↑↓ PgUp/PgDn move · Enter open · Ctrl+E editor · Ctrl+F/V/D/G toggle panes"
+		hint := "Esc/Ctrl+T back to chat \u00b7 \u2191\u2193 PgUp/PgDn move \u00b7 Enter open \u00b7 Ctrl+E editor \u00b7 Ctrl+F/V/D/G toggle panes"
 		if p.activePane == PaneDiff {
-			hint = "y/Enter accept hunk (stage) · r r revert hunk · ↑↓ hunk · PgUp/PgDn scroll · u refresh · Ctrl+T chat"
+			hint = "y/Enter accept hunk (stage) \u00b7 r r revert hunk \u00b7 \u2191\u2193 hunk \u00b7 PgUp/PgDn scroll \u00b7 u refresh \u00b7 Ctrl+T chat"
 		}
 		return box.BorderForeground(lipgloss.Color("240")).Render(mutedStyle.Render(lipgloss.NewStyle().MaxWidth(w - 4).Render(hint)))
 	}
-	hint := "Enter type (/help) · Ctrl+R thinking · Ctrl+X tool details · PgUp/PgDn scroll · Esc quit · Ctrl+P/B plan/build · Ctrl+L model · Ctrl+F/V/D/G panes · Ctrl+N/W session · Ctrl+O history · Ctrl+T panes"
+	hint := "Enter type (/help) \u00b7 Ctrl+R thinking \u00b7 Ctrl+X tool details \u00b7 PgUp/PgDn scroll \u00b7 Esc quit \u00b7 Ctrl+P/B plan/build \u00b7 Ctrl+L model \u00b7 Ctrl+F/V/D/G panes \u00b7 Ctrl+N/W session \u00b7 Ctrl+O history \u00b7 Ctrl+T panes"
 	hint = lipgloss.NewStyle().MaxWidth(w - 4).Render(hint)
 	return box.BorderForeground(lipgloss.Color("240")).Render(mutedStyle.Render(hint))
 }

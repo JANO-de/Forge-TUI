@@ -203,3 +203,35 @@ func sameFile(a, b string) bool {
 	sb, err := os.Stat(b)
 	return err == nil && os.SameFile(sa, sb)
 }
+
+// diffActAll accepts or reverts all hunks in the diff
+func (p *ProjectView) diffActAll(accept bool) tea.Cmd {
+	if p.diff == nil || !p.diff.Loaded || p.diff.NotRepo {
+		return nil
+	}
+	
+	files := p.diff.Files
+	if len(files) == 0 {
+		return nil
+	}
+	
+	dir := p.ProjectPath
+	return func() tea.Msg {
+		ctx, cancel := gitCtx()
+		defer cancel()
+		r, err := gitx.Open(ctx, dir)
+		if err != nil {
+			return diffActionMsg{accept: accept, rel: "all files", err: err}
+		}
+		for _, f := range files {
+			for _, h := range f.Hunks {
+				if accept {
+					r.Accept(ctx, f, h)
+				} else {
+					r.Revert(ctx, f, h)
+				}
+			}
+		}
+		return diffActionMsg{accept: accept, rel: "all files", err: nil}
+	}
+}
