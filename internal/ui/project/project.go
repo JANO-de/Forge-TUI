@@ -116,6 +116,16 @@ type ProjectView struct {
 	handoffTotal  int
 	showThink     bool // Ctrl+R: expand reasoning
 	showTools     bool // Ctrl+X: expand tool input/output
+	editingMsgIdx  int
+	editOriginal   string
+	showTimestamps bool
+	Theme          string
+	projectTokensIn int
+	projectTokensOut int
+	projectCost float64
+	searchQuery   string
+	searchMatches []int
+	currentMatch  int
 }
 
 func InitialProjectView(projectPath string, width, height int) ProjectView {

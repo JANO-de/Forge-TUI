@@ -10,7 +10,21 @@ import (
 )
 
 func (p *ProjectView) refreshStatus() {
+	p.updateProjectTotals()
 	p.statusBar = p.statusBar.Update(p.statusData())
+}
+
+func (p *ProjectView) updateProjectTotals() {
+	p.projectTokensIn = 0
+	p.projectTokensOut = 0
+	p.projectCost = 0
+	for _, sess := range p.sessions {
+		for _, m := range sess.run.msgs {
+			p.projectTokensIn += m.Tokens.Input + m.Tokens.Cache.Read + m.Tokens.Cache.Write
+			p.projectTokensOut += m.Tokens.Output
+			p.projectCost += m.Cost
+		}
+	}
 }
 
 func (p ProjectView) statusData() status.StatusData {
@@ -47,6 +61,10 @@ func (p ProjectView) statusData() status.StatusData {
 		d.TokensOut += m.Tokens.Output
 		d.Cost += m.Cost
 	}
+	p.updateProjectTotals()
+	d.TokensIn += p.projectTokensIn
+	d.TokensOut += p.projectTokensOut
+	d.Cost += p.projectCost
 	if last, ok := s.run.msgs[s.run.lastAssistant]; ok && p.agent != nil {
 		used := last.Tokens.Input + last.Tokens.Output + last.Tokens.Cache.Read + last.Tokens.Cache.Write
 		for _, m := range p.agent.models {
@@ -62,8 +80,12 @@ func (p ProjectView) renderTabs() string {
 	var tabs []string
 	for i, sess := range p.sessions {
 		name := sess.Name
-		if sess.run.pending != nil || sess.run.question != nil {
-			name = "! " + name // waiting for the user
+		if sess.run.working {
+			name = "\u280b " + name // spinner for busy
+		} else if sess.run.pending != nil || sess.run.question != nil {
+			name = "! " + name // waiting for user
+		} else if sess.run.todoTotal > 0 && sess.run.todoDone == sess.run.todoTotal {
+			name = "\u2713 " + name // checkmark for done
 		}
 		if i == p.activeSession {
 			tabs = append(tabs, activeTabStyle.Render("["+name+"]"))
@@ -112,7 +134,7 @@ func (p ProjectView) renderInput() string {
 		}
 		return box.BorderForeground(lipgloss.Color("240")).Render(mutedStyle.Render(lipgloss.NewStyle().MaxWidth(w - 4).Render(hint)))
 	}
-	hint := "Enter type (/help) · Ctrl+R thinking · Ctrl+X tool details · PgUp/PgDn scroll · Esc quit · Ctrl+P/B plan/build · Ctrl+L model · Ctrl+F/V/D/G panes · Ctrl+N/W session · Ctrl+O history · Ctrl+T panes"
+	hint := "Enter type (/help) · Ctrl+R thinking · Ctrl+X tool details · PgUp/PgDn scroll · Esc quit · Ctrl+P/B plan/build · Ctrl+L/M model · Ctrl+F/V/D/G panes · Ctrl+N/W session · Ctrl+O history · Ctrl+T panes"
 	hint = lipgloss.NewStyle().MaxWidth(w - 4).Render(hint)
 	return box.BorderForeground(lipgloss.Color("240")).Render(mutedStyle.Render(hint))
 }

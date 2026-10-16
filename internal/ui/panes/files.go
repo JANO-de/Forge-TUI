@@ -330,6 +330,11 @@ type FileViewer struct {
 	Height       int
 	ScrollY      int
 	ShowLineNums bool
+	FoldedRanges []foldRange // ranges of lines that are folded
+}
+
+type foldRange struct {
+	Start, End int
 }
 
 func NewFileViewer(path string) (*FileViewer, error) {

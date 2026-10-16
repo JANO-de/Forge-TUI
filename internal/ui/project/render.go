@@ -47,7 +47,7 @@ func (p ProjectView) chatLines() []string {
 		if i > 0 && !(isCompact(m.Type) && isCompact(prev)) {
 			lines = append(lines, "")
 		}
-		lines = append(lines, renderBlock(m, pendingID, p.chatWidth(), opts)...)
+		lines = append(lines, renderBlock(m, pendingID, p.chatWidth(), opts, p.showTimestamps)...)
 		prev = m.Type
 	}
 	return lines
@@ -57,10 +57,15 @@ type viewOpts struct{ think, tools bool }
 
 func isCompact(t MsgType) bool { return t == MsgTool || t == MsgReasoning }
 
-func renderBlock(m Message, pendingID string, w int, o viewOpts) []string {
+func renderBlock(m Message, pendingID string, w int, o viewOpts, showTimestamps bool) []string {
 	switch m.Type {
 	case MsgUser:
-		return withBar("You", colUser, wrapPlain(m.Content, w-2))
+		lines := withBar("You", colUser, wrapPlain(m.Content, w-2))
+		if showTimestamps && !m.Timestamp.IsZero() {
+			ts := m.Timestamp.Format("15:04:05")
+			lines = append([]string{mutedStyle.Render("  " + ts)}, lines...)
+		}
+		return lines
 	case MsgAssistant:
 		return withBar("Assistant", colAssistant, renderMarkdown(m.Content, w-2))
 	case MsgTool:
@@ -183,4 +188,83 @@ func (p *ProjectView) scrollBy(delta int) {
 		maxOff = 0
 	}
 	s.scroll = min(max(s.scroll+delta, 0), maxOff)
+}
+
+func (p *ProjectView) performSearch(query string) {
+	p.searchQuery = query
+	p.currentMatch = 0
+	p.searchMatches = nil
+	if query == "" {
+		return
+	}
+	s := &p.sessions[p.activeSession]
+	for i, m := range s.Messages {
+		if strings.Contains(strings.ToLower(m.Content), strings.ToLower(query)) {
+			p.searchMatches = append(p.searchMatches, i)
+		}
+	}
+}
+
+func (p *ProjectView) nextSearchMatch() {
+	if len(p.searchMatches) == 0 {
+		return
+	}
+	p.currentMatch = (p.currentMatch + 1) % len(p.searchMatches)
+	idx := p.searchMatches[p.currentMatch]
+	p.sessions[p.activeSession].scroll = 0
+	for i := idx; i >= 0; i-- {
+		p.sessions[p.activeSession].scroll++
+	}
+}
+
+func (p *ProjectView) prevSearchMatch() {
+	if len(p.searchMatches) == 0 {
+		return
+	}
+	p.currentMatch = (p.currentMatch - 1 + len(p.searchMatches)) % len(p.searchMatches)
+	idx := p.searchMatches[p.currentMatch]
+	p.sessions[p.activeSession].scroll = 0
+	for i := idx; i >= 0; i-- {
+		p.sessions[p.activeSession].scroll++
+	}
+}
+
+func extractCodeBlocks(text string) []string {
+	var blocks []string
+	var currentBlock strings.Builder
+	inCodeBlock := false
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			if inCodeBlock {
+				if currentBlock.Len() > 0 {
+					blocks = append(blocks, currentBlock.String())
+					currentBlock.Reset()
+				}
+				inCodeBlock = false
+			} else {
+				inCodeBlock = true
+			}
+		} else if inCodeBlock {
+			if currentBlock.Len() > 0 {
+				currentBlock.WriteString("\n")
+			}
+			currentBlock.WriteString(line)
+		}
+	}
+	if inCodeBlock && currentBlock.Len() > 0 {
+		blocks = append(blocks, currentBlock.String())
+	}
+	return blocks
+}
+
+func (p *ProjectView) copyLastCodeBlock() string {
+	s := &p.sessions[p.activeSession]
+	for i := len(s.Messages) - 1; i >= 0; i-- {
+		blocks := extractCodeBlocks(s.Messages[i].Content)
+		if len(blocks) > 0 {
+			return blocks[len(blocks)-1]
+		}
+	}
+	return ""
 }
