@@ -398,3 +398,112 @@ type EditorFinishedMsg struct {
 	Path string
 	Err  error
 }
+
+// PreviewType represents the type of content being previewed
+type PreviewType int
+
+const (
+	PreviewMarkdown PreviewType = iota
+	PreviewImage
+	PreviewText
+)
+
+// PreviewData holds data for image/markdown preview
+type PreviewData struct {
+	Content  string
+	Path     string
+	Type     PreviewType
+	ImageErr error
+}
+
+// NewPreviewData creates preview data from content, detecting if it's markdown or image
+func NewPreviewData(content, path string) *PreviewData {
+	pd := &PreviewData{
+		Content: content,
+		Path:    path,
+		Type:    PreviewText,
+	}
+	
+	// Check if it's an image file
+	if isImageFile(path) {
+		pd.Type = PreviewImage
+	}
+	// Check if content looks like markdown
+	if strings.Contains(content, "# ") || strings.Contains(content, "## ") || 
+		strings.Contains(content, "```") || strings.Contains(content, "*") || 
+		strings.Contains(content, "_") || strings.Contains(content, "[") {
+		pd.Type = PreviewMarkdown
+	}
+	
+	return pd
+}
+
+// isImageFile checks if the file path is an image
+func isImageFile(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.HasSuffix(lower, ".png") || 
+		strings.HasSuffix(lower, ".jpg") || 
+		strings.HasSuffix(lower, ".jpeg") || 
+		strings.HasSuffix(lower, ".gif") || 
+		strings.HasSuffix(lower, ".bmp") || 
+		strings.HasSuffix(lower, ".webp") || 
+		strings.HasSuffix(lower, ".svg")
+}
+
+// RenderPreview renders the preview based on its type
+func RenderPreview(pd *PreviewData, width, height int) string {
+	if pd == nil {
+		return ""
+	}
+	
+	switch pd.Type {
+	case PreviewImage:
+		if pd.ImageErr != nil {
+			return mutedStyle.Render("(image preview error: " + pd.ImageErr.Error() + ")")
+		}
+		return renderImagePreview(pd.Content, width, height)
+	case PreviewMarkdown:
+		return renderMarkdown(pd.Content, width)
+	default:
+		return pd.Content
+	}
+}
+
+// renderImagePreview renders an image (placeholder implementation)
+func renderImagePreview(content string, width, height int) string {
+	// For actual image rendering, would use a TUI image library
+	// This is a placeholder that shows image info
+	lines := []string{
+		"[Image Preview]",
+		mutedStyle.Render(fmt.Sprintf("Size: %d x %d", width, height)),
+		mutedStyle.Render("(Actual image rendering would appear here)"),
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderMarkdown renders markdown content (already exists in render.go)
+func renderMarkdown(content string, width int) string {
+	// This is a simplified version - full markdown rendering would be more complex
+	var lines []string
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		
+		// Headers
+		if strings.HasPrefix(trimmed, "# ") {
+			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Bold(true).Render(strings.TrimPrefix(trimmed, "# ")))
+		} else if strings.HasPrefix(trimmed, "## ") {
+			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Bold(true).Render(strings.TrimPrefix(trimmed, "## ")))
+		} else if strings.HasPrefix(trimmed, "### ") {
+			lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color("229")).Render(strings.TrimPrefix(trimmed, "### ")))
+		// Code blocks
+		} else if strings.HasPrefix(trimmed, "```") {
+			lines = append(lines, mutedStyle.Render(trimmed))
+		} else if strings.Contains(trimmed, "`") {
+			// Inline code
+			lines = append(lines, lipgloss.NewStyle().Background(lipgloss.Color("235")).Render(line))
+		} else {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
