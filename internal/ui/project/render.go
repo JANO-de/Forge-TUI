@@ -47,7 +47,7 @@ func (p ProjectView) chatLines() []string {
 		if i > 0 && !(isCompact(m.Type) && isCompact(prev)) {
 			lines = append(lines, "")
 		}
-		lines = append(lines, renderBlock(m, pendingID, p.chatWidth(), opts, p.showTimestamps)...)
+		lines = append(lines, renderBlock(m, pendingID, p.chatWidth(), opts)...)
 		prev = m.Type
 	}
 	return lines
@@ -57,15 +57,10 @@ type viewOpts struct{ think, tools bool }
 
 func isCompact(t MsgType) bool { return t == MsgTool || t == MsgReasoning }
 
-func renderBlock(m Message, pendingID string, w int, o viewOpts, showTimestamps bool) []string {
+func renderBlock(m Message, pendingID string, w int, o viewOpts) []string {
 	switch m.Type {
 	case MsgUser:
-		lines := withBar("You", colUser, wrapPlain(m.Content, w-2))
-		if showTimestamps && !m.Timestamp.IsZero() {
-			ts := m.Timestamp.Format("15:04:05")
-			lines = append([]string{mutedStyle.Render("  " + ts)}, lines...)
-		}
-		return lines
+		return withBar("You", colUser, wrapPlain(m.Content, w-2))
 	case MsgAssistant:
 		return withBar("Assistant", colAssistant, renderMarkdown(m.Content, w-2))
 	case MsgTool:
@@ -190,81 +185,108 @@ func (p *ProjectView) scrollBy(delta int) {
 	s.scroll = min(max(s.scroll+delta, 0), maxOff)
 }
 
+// performSearch searches for query in chat messages
 func (p *ProjectView) performSearch(query string) {
 	p.searchQuery = query
-	p.currentMatch = 0
-	p.searchMatches = nil
+	p.searchMatches = []int{}
+	p.searchIndex = 0
+
 	if query == "" {
+		p.showSearch = false
 		return
 	}
-	s := &p.sessions[p.activeSession]
-	for i, m := range s.Messages {
-		if strings.Contains(strings.ToLower(m.Content), strings.ToLower(query)) {
+
+	p.showSearch = true
+	if len(p.sessions) == 0 {
+		return
+	}
+
+	lines := p.chatLines()
+	queryLower := strings.ToLower(query)
+
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), queryLower) {
 			p.searchMatches = append(p.searchMatches, i)
 		}
 	}
 }
 
+// nextSearchMatch navigates to the next search match
 func (p *ProjectView) nextSearchMatch() {
 	if len(p.searchMatches) == 0 {
 		return
 	}
-	p.currentMatch = (p.currentMatch + 1) % len(p.searchMatches)
-	idx := p.searchMatches[p.currentMatch]
-	p.sessions[p.activeSession].scroll = 0
-	for i := idx; i >= 0; i-- {
-		p.sessions[p.activeSession].scroll++
+	p.searchIndex = (p.searchIndex + 1) % len(p.searchMatches)
+	matchPos := p.searchMatches[p.searchIndex]
+	s := &p.sessions[p.activeSession]
+	h := p.chatHeight()
+	if matchPos >= s.scroll && matchPos < s.scroll+h {
+		return
 	}
+	s.scroll = max(0, matchPos-h/2)
 }
 
+// prevSearchMatch navigates to the previous search match
 func (p *ProjectView) prevSearchMatch() {
 	if len(p.searchMatches) == 0 {
 		return
 	}
-	p.currentMatch = (p.currentMatch - 1 + len(p.searchMatches)) % len(p.searchMatches)
-	idx := p.searchMatches[p.currentMatch]
-	p.sessions[p.activeSession].scroll = 0
-	for i := idx; i >= 0; i-- {
-		p.sessions[p.activeSession].scroll++
+	p.searchIndex = (p.searchIndex - 1 + len(p.searchMatches)) % len(p.searchMatches)
+	matchPos := p.searchMatches[p.searchIndex]
+	s := &p.sessions[p.activeSession]
+	h := p.chatHeight()
+	if matchPos >= s.scroll && matchPos < s.scroll+h {
+		return
 	}
+	s.scroll = max(0, matchPos-h/2)
 }
 
+// copyLastCodeBlock extracts and returns the last code block from chat
+func (p *ProjectView) copyLastCodeBlock() string {
+	if len(p.sessions) == 0 {
+		return ""
+	}
+	s := p.sessions[p.activeSession]
+	var lastCodeBlock string
+
+	for _, m := range s.Messages {
+		if m.Type == MsgUser || m.Type == MsgAssistant {
+			blocks := extractCodeBlocks(m.Content)
+			if len(blocks) > 0 {
+				lastCodeBlock = blocks[len(blocks)-1]
+			}
+		}
+	}
+	return lastCodeBlock
+}
+
+// extractCodeBlocks extracts code blocks from markdown text
 func extractCodeBlocks(text string) []string {
 	var blocks []string
+	lines := strings.Split(text, "\n")
+	inBlock := false
 	var currentBlock strings.Builder
-	inCodeBlock := false
-	for _, line := range strings.Split(text, "\n") {
+
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
-			if inCodeBlock {
+			if inBlock {
 				if currentBlock.Len() > 0 {
-					blocks = append(blocks, currentBlock.String())
+					blocks = append(blocks, strings.TrimSpace(currentBlock.String()))
 					currentBlock.Reset()
 				}
-				inCodeBlock = false
+				inBlock = false
 			} else {
-				inCodeBlock = true
+				inBlock = true
 			}
-		} else if inCodeBlock {
-			if currentBlock.Len() > 0 {
-				currentBlock.WriteString("\n")
-			}
-			currentBlock.WriteString(line)
+		} else if inBlock {
+			currentBlock.WriteString(line + "\n")
 		}
 	}
-	if inCodeBlock && currentBlock.Len() > 0 {
-		blocks = append(blocks, currentBlock.String())
-	}
-	return blocks
-}
 
-func (p *ProjectView) copyLastCodeBlock() string {
-	s := &p.sessions[p.activeSession]
-	for i := len(s.Messages) - 1; i >= 0; i-- {
-		blocks := extractCodeBlocks(s.Messages[i].Content)
-		if len(blocks) > 0 {
-			return blocks[len(blocks)-1]
-		}
+	if inBlock && currentBlock.Len() > 0 {
+		blocks = append(blocks, strings.TrimSpace(currentBlock.String()))
 	}
-	return ""
+
+	return blocks
 }

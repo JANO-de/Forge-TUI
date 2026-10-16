@@ -152,10 +152,6 @@ func (p *ProjectView) handleDiffKey(msg tea.KeyMsg) (cmd tea.Cmd, ok bool) {
 			d.Move(1, rows)
 		case 'y':
 			return p.diffAct(true), true
-		case 'A':
-			return p.diffActAll(true), true
-		case 'R':
-			return p.diffActAll(false), true
 		case 'u':
 			d.Status = ""
 			return p.refreshDiff(), true
@@ -208,12 +204,17 @@ func sameFile(a, b string) bool {
 	return err == nil && os.SameFile(sa, sb)
 }
 
-// diffActAll accepts or reverts all hunks in all files
+// diffActAll accepts or reverts all hunks in the diff
 func (p *ProjectView) diffActAll(accept bool) tea.Cmd {
 	if p.diff == nil || !p.diff.Loaded || p.diff.NotRepo {
 		return nil
 	}
+
 	files := p.diff.Files
+	if len(files) == 0 {
+		return nil
+	}
+
 	dir := p.ProjectPath
 	return func() tea.Msg {
 		ctx, cancel := gitCtx()
