@@ -7,7 +7,7 @@ let cfg = config.programs.forge; in
     enable = lib.mkEnableOption "Forge, a terminal UI for OpenCode";
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.system}.default;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       description = "Forge package to install.";
     };
   };
